@@ -13,6 +13,7 @@ use (
 	./controllers/terminal
 	./controllers/user
 	./controllers/resources
+	./controllers/storage/minio
 	./service/auth
 	./service/hub
 	./service/payment

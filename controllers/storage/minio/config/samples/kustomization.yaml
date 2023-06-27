@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- minio.storage.sealos.io_v1_minio.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples
