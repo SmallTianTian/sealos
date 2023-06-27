@@ -1,0 +1,32 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - minio.storage.sealos.io.sealos.io
+  resources:
+  - minios
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - minio.storage.sealos.io.sealos.io
+  resources:
+  - minios/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - minio.storage.sealos.io.sealos.io
+  resources:
+  - minios/status
+  verbs:
+  - get
+  - patch
+  - update

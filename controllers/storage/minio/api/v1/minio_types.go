@@ -17,7 +17,16 @@ limitations under the License.
 package v1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// +kubebuilder:validation:Enum=nginx;apisix
+type IngressType string
+
+const (
+	Nginx  IngressType = "nginx"
+	Apisix IngressType = "apisix"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -28,18 +37,48 @@ type MinioSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of Minio. Edit minio_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	//+kubebuilder:validation:Required
+	//+kubebuilder:validation:Maximum=32
+	//+kubebuilder:default=1
+	Replicas uint8 `json:"replicas"`
+	//+kubebuilder:validation:Required
+	//+kubebuilder:validation:Pattern:=`^[a-z0-9]([a-z0-9\.\-]*[a-z0-9])?$`
+	ClusterVersionRef string `json:"clusterVersionRef"`
+	//+kubebuilder:validation:Optional
+	//+kubebuilder:default=nginx
+	IngressType IngressType `json:"ingressType"`
+	//+kubebuilder:validation:Optional
+	//+kubebuilder:default=false
+	ConsolePublic bool `json:"consolePublic"`
+	//+kubebuilder:validation:Required
+	//+kubebuilder:default=false
+	S3Public bool `json:"s3Public"`
+	//+kubebuilder:validation:Required
+	//+kubebuilder:default=1
+	PVCNum int64 `json:"pvcNum"`
+
+	//+kubebuilder:validation:Required
+	Resource corev1.ResourceRequirements `json:"resource"`
 }
 
 // MinioStatus defines the observed state of Minio
 type MinioStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+
+	AvailableReplicas   int32  `json:"availableReplicas"`
+	CurrentVersionRef   string `json:"currentVersionRef"`
+	PublicS3Domain      string `json:"publicS3Domain"`
+	PublicConsoleDomain string `json:"publicConsoleDomain"`
+	SecretName          string `json:"secretName"`
 }
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Version",type=string,JSONPath=".spec.ClusterVersionRef"
+//+kubebuilder:printcolumn:name="Available",type=string,JSONPath=".status.availableReplicas"
+//+kubebuilder:printcolumn:name="Domain",type=string,JSONPath=".status.domain"
+//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // Minio is the Schema for the minios API
 type Minio struct {

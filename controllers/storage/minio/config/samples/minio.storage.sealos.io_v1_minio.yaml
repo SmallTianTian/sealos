@@ -3,10 +3,20 @@ kind: Minio
 metadata:
   labels:
     app.kubernetes.io/name: minio
-    app.kubernetes.io/instance: minio-sample
-    app.kubernetes.io/part-of: minio
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/created-by: minio
   name: minio-sample
+  namespace: user-namespace
 spec:
-  # TODO(user): Add fields here
+  replicas: 4
+  clusterVersionRef: minio/minio:RELEASE.2023-06-29T05-12-28Z
+  ingressType: nginx
+  consolePublic: false
+  s3Public: false
+  pvcNum: 32
+  resoure:
+    limits:
+      cpu: "1"
+      memory: 256Mi
+    requests:
+      cpu: "1"
+      memory: "256Mi"
+      storage: 10Gi
