@@ -66,7 +66,7 @@ type MinioStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	AvailableReplicas   int32  `json:"availableReplicas"`
+	AvailableReplicas   uint8  `json:"availableReplicas"`
 	CurrentVersionRef   string `json:"currentVersionRef"`
 	PublicS3Domain      string `json:"publicS3Domain"`
 	PublicConsoleDomain string `json:"publicConsoleDomain"`
