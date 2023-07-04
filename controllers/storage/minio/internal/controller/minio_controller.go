@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -26,6 +27,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -46,13 +48,29 @@ const (
 	passwordSplitKey    = "-"
 	rootPasswordKey     = "MINIO_ROOT_PASSWORD"
 	LetterBytes         = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	hostnameLetterBytes = "abcdefghijklmnopqrstuvwxyz0123456789"
+	portNameS3          = "s3"
+	portNameConsole     = "console"
+	Protocol            = "https://"
+	HostnameLength      = 8
+	s3Port              = 9000
+	consolePort         = 9001
+)
+
+const (
+	DefaultDomain          = "cloud.sealos.io"
+	DefaultSecretName      = "wildcard-cloud-sealos-io-cert"
+	DefaultSecretNamespace = "sealos-system"
 )
 
 // MinioReconciler reconciles a Minio object
 type MinioReconciler struct {
 	client.Client
-	recorder record.EventRecorder
-	Scheme   *runtime.Scheme
+	minioDomain     string
+	secretName      string
+	secretNamespace string
+	recorder        record.EventRecorder
+	Scheme          *runtime.Scheme
 }
 
 //+kubebuilder:rbac:groups=minio.storage.sealos.io.sealos.io,resources=minios,verbs=get;list;watch;create;update;patch;delete
@@ -164,7 +182,7 @@ func (r *MinioReconciler) syncSecret(ctx context.Context, minio *miniov1.Minio) 
 	return r.Status().Update(ctx, minio)
 }
 
-func (r *MinioReconciler) syncStatefulSet(ctx context.Context, minio *miniov1.Minio, hostName *string) error {
+func (r *MinioReconciler) syncStatefulSet(ctx context.Context, minio *miniov1.Minio, hostname *string) error {
 	labelsMap := buildLabelsMap(minio)
 	var (
 		objectMeta           metav1.ObjectMeta
@@ -189,14 +207,14 @@ func (r *MinioReconciler) syncStatefulSet(ctx context.Context, minio *miniov1.Mi
 	}
 	ports = []corev1.ContainerPort{
 		{
-			Name:          "s3",
+			Name:          portNameS3,
 			Protocol:      corev1.ProtocolTCP,
-			ContainerPort: 9000,
+			ContainerPort: s3Port,
 		},
 		{
-			Name:          "console",
+			Name:          portNameConsole,
 			Protocol:      corev1.ProtocolTCP,
-			ContainerPort: 9001,
+			ContainerPort: consolePort,
 		},
 	}
 	envFrom = []corev1.EnvFromSource{
@@ -278,23 +296,107 @@ func (r *MinioReconciler) syncStatefulSet(ctx context.Context, minio *miniov1.Mi
 			statefulSet.Spec.Template.Spec.Containers[0].Resources = containers[0].Resources
 		}
 
+		if statefulSet.Spec.Template.Spec.Hostname == "" {
+			letterID, err := nanoid.CustomASCII(LetterBytes, HostnameLength)
+			if err != nil {
+				return err
+			}
+			// to keep pace with ingress host, hostname must start with a lower case letter
+			*hostname = "minio-" + letterID()
+			statefulSet.Spec.Template.Spec.Hostname = *hostname
+		} else {
+			*hostname = statefulSet.Spec.Template.Spec.Hostname
+		}
+
 		return controllerutil.SetControllerReference(minio, statefulSet, r.Scheme)
 	}); err != nil {
 		return err
 	}
 
-	minio.Status.AvailableReplicas = minio.Spec.Replicas
-	minio.Status.CurrentVersionRef = minio.Spec.ClusterVersionRef
-	return r.Status().Update(ctx, minio)
-}
-
-// TODO
-func (r *MinioReconciler) syncService(ctx context.Context, minio *miniov1.Minio) error {
+	needUpdate := false
+	if minio.Status.AvailableReplicas != minio.Spec.Replicas {
+		minio.Status.AvailableReplicas = minio.Spec.Replicas
+		needUpdate = true
+	}
+	if minio.Status.CurrentVersionRef != minio.Spec.ClusterVersionRef {
+		minio.Status.CurrentVersionRef = minio.Spec.ClusterVersionRef
+		needUpdate = true
+	}
+	if needUpdate {
+		return r.Status().Update(ctx, minio)
+	}
 	return nil
 }
 
-// TODO
-func (r *MinioReconciler) syncIngress(ctx context.Context, minio *miniov1.Minio, hostName string) error {
+func (r *MinioReconciler) syncService(ctx context.Context, minio *miniov1.Minio) error {
+	labelsMap := buildLabelsMap(minio)
+	expectService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      minio.Name,
+			Namespace: minio.Namespace,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: labelsMap,
+			Type:     corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{
+				{Name: portNameS3, Port: s3Port, TargetPort: intstr.FromInt(s3Port), Protocol: corev1.ProtocolTCP},
+				{Name: portNameConsole, Port: consolePort, TargetPort: intstr.FromInt(consolePort), Protocol: corev1.ProtocolTCP},
+			},
+		},
+	}
+
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      minio.Name,
+			Namespace: minio.Namespace,
+		},
+	}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, service, func() error {
+		service.Spec.Selector = expectService.Spec.Selector
+		service.Spec.Type = expectService.Spec.Type
+		service.Spec.Ports = expectService.Spec.Ports
+
+		return controllerutil.SetControllerReference(minio, service, r.Scheme)
+	})
+	return err
+}
+
+func (r *MinioReconciler) syncIngress(ctx context.Context, minio *miniov1.Minio, hostname string) error {
+	if !minio.Spec.ConsolePublic && !minio.Spec.S3Public {
+		return nil
+	}
+	var s3Host, consoleHost string
+
+	var err error
+	if minio.Spec.S3Public {
+		s3Host = fmt.Sprintf("s3-%s.%s", hostname, r.minioDomain)
+	}
+	if minio.Spec.ConsolePublic {
+		consoleHost = fmt.Sprintf("console-%s.%s", hostname, r.minioDomain)
+	}
+	switch minio.Spec.IngressType {
+	case miniov1.Nginx:
+		err = r.syncNginxIngress(ctx, minio, s3Host, consoleHost)
+	case miniov1.Apisix:
+		err = r.syncApisixIngress(ctx, minio, s3Host, consoleHost)
+	}
+	if err != nil {
+		return err
+	}
+
+	needUpdate := false
+	if h := Protocol + s3Host; h != minio.Status.PublicS3Domain {
+		minio.Status.PublicS3Domain = h
+		needUpdate = true
+	}
+	if h := Protocol + consoleHost; h != minio.Status.PublicConsoleDomain {
+		minio.Status.PublicConsoleDomain = h
+		needUpdate = true
+	}
+	if needUpdate {
+		return r.Status().Update(ctx, minio)
+	}
 	return nil
 }
 
@@ -305,9 +407,36 @@ func buildLabelsMap(minio *miniov1.Minio) map[string]string {
 	return labelsMap
 }
 
+func getDomain() string {
+	domain := os.Getenv("DOMAIN")
+	if domain == "" {
+		return DefaultDomain
+	}
+	return domain
+}
+
+func getSecretName() string {
+	secretName := os.Getenv("SECRET_NAME")
+	if secretName == "" {
+		return DefaultSecretName
+	}
+	return secretName
+}
+
+func getSecretNamespace() string {
+	secretNamespace := os.Getenv("SECRET_NAMESPACE")
+	if secretNamespace == "" {
+		return DefaultSecretNamespace
+	}
+	return secretNamespace
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *MinioReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.recorder = mgr.GetEventRecorderFor("sealos-storage-minio-controller")
+	r.minioDomain = getDomain()
+	r.secretName = getSecretName()
+	r.secretNamespace = getSecretNamespace()
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&miniov1.Minio{}).
 		Complete(r)
